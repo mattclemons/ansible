@@ -1,0 +1,104 @@
+# deploy.yml
+- name: Configure DigitalOcean Droplet
+  hosts: digitalocean
+  become: true
+
+  tasks:
+    # -------- Docker Setup (From setup_docker.sh) --------
+    - name: Stop and disable unattended-upgrades
+      systemd:
+        name: unattended-upgrades
+        enabled: no
+        state: stopped
+
+    - name: Update package list
+      apt:
+        update_cache: yes
+
+    - name: Install Docker and Docker Compose
+      apt:
+        name:
+          - docker.io
+          - docker-compose
+        state: present
+
+    - name: Suppress needrestart notifications
+      lineinfile:
+        path: /etc/needrestart/needrestart.conf
+        line: "NEEDRESTART_MODE=a"
+
+    - name: Clone the 1on1App repository
+      git:
+        repo: 'https://github.com/mattclemons/docker.git'
+        dest: /opt/1on1App
+
+    - name: Build and start Docker containers for 1on1App
+      command: docker-compose up -d --build
+      args:
+        chdir: /opt/1on1App/1on1App
+
+
+    # -------- SonarQube and OWASP ZAP Setup (From setup_sonar.sh) --------
+    - name: Install Docker for SonarQube
+      apt:
+        name: docker.io
+        state: present
+
+    - name: Start and enable Docker service
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+
+    - name: Pull and run SonarQube Docker container
+      docker_container:
+        name: sonarqube
+        image: sonarqube:lts
+        ports:
+          - "9000:9000"
+        state: started
+        restart_policy: always
+
+
+    # -------- Jenkins Setup (From setup_jenkins.sh) --------
+    - name: Install Docker for Jenkins if not already installed
+      apt:
+        name: docker.io
+        state: present
+
+    - name: Enable and start Docker service for Jenkins
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+
+    - name: Pull Jenkins Docker image
+      docker_image:
+        name: jenkins/jenkins:lts
+        source: pull
+
+    - name: Run Jenkins container
+      docker_container:
+        name: jenkins
+        image: jenkins/jenkins:lts
+        ports:
+          - "8080:8080"
+          - "50000:50000"
+        volumes:
+          - jenkins_home:/var/jenkins_home
+        state: started
+        restart_policy: always
+
+    - name: Wait for Jenkins to initialize
+      pause:
+        seconds: 30
+
+    - name: Retrieve Jenkins initial admin password
+      command: docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+      register: jenkins_password
+      ignore_errors: yes
+
+    - name: Display Jenkins initial admin password
+      debug:
+        msg: "Jenkins initial admin password: {{ jenkins_password.stdout }}"
+
